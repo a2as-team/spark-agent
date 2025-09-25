@@ -135,10 +135,16 @@ const AddMoney = () => {
             const futureTime = new Date(now.getTime() + 5 * 60000); // 5 minutes from now
             
             // Create transaction object with all required fields
+            const toLocalISOString = (/** @type {{ getTimezoneOffset: () => number; getTime: () => number; }} */ date) => {
+                const timezoneOffset = date.getTimezoneOffset() * 60000;
+                const localTime = new Date(date.getTime() - timezoneOffset);
+                return localTime.toISOString().slice(0, -1);
+            };
+
             const transactionData = {
                 transaction_id: transactionId,
                 user_id: 'user_1',
-                timestamp_initiated: now.toISOString(),
+                timestamp_initiated: toLocalISOString(now),
                 amount: amountToAdd.toFixed(2),
                 transaction_type: 'add_money',
                 recipient_type: 'wallet_topup',
