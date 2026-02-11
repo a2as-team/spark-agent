@@ -1,0 +1,583 @@
+manifest:
+  version: "0.1.3"
+  schema: https://a2as.org/cert/schema
+  subject:
+    name: riu-rd/spark-agent
+    source: https://github.com/riu-rd/spark-agent
+    branch: main
+    commit: "c990005f"
+    scope: [agents/host_agent_adk/api_server.py, agents/host_agent_adk/host/agent.py, agents/host_agent_adk/host/prompt.py,
+      agents/host_agent_adk/host/remote_agent_connection.py, agents/host_agent_adk/host/tools/database_tools.py, agents/reconciler_agent/agent.py,
+      agents/reconciler_agent/prompt.py, agents/reconciler_agent/sub_agents/escalator_agent/agent.py, agents/reconciler_agent/sub_agents/escalator_agent/prompt.py,
+      agents/reconciler_agent/sub_agents/escalator_agent/tools/fetch_transaction_for_report.py, agents/reconciler_agent/sub_agents/escalator_agent/tools/save_generated_report.py,
+      agents/reconciler_agent/tools/__init__.py, agents/reconciler_agent/tools/retry_transaction.py, agents/reconciler_agent/tools/transaction_fetcher.py]
+  issued:
+    by: A2AS.org
+    at: '2026-02-11T17:06:02Z'
+    url: https://a2as.org/certified/agents/riu-rd/spark-agent
+  signatures:
+    digest: sha256:nqVrHNlgazUwXy9ApZMDtveUmEcsFq2-Xtjb6B9a7nM
+    key: ed25519:tc7ZWTQg-BX7FYvNBHFep6lEd1oIluDdFQKSLGrRo0E
+    sig: ed25519:4mQnR31iUkzgI3YznKyAfMniSa0w1Sr-lYjLxr0AsBkXSgQ_Eu_DkJC29hIbOlTd48T7WhDDNR1x16gTuKCYCg
+
+agents:
+  agent.create_agent.0:
+    type: factory
+    models: [gemini-2.5-flash]
+    tools: [query_user_transactions, run_discrepancy_check, send_message_to_remote_agent, get_transaction_status]
+    params:
+      name: SPARK_Host_Agent
+      instruction: self.root_instruction
+      generate_content_config:
+        ref: generation_config
+      description: SPARK Host Agent - AI-powered support for BPI transaction discrepancy resolution
+      function: create_agent
+      instance: agent.create_agent
+  agent.create_agent.1:
+    type: factory
+    models: [gemini-2.5-flash]
+    tools: [fetch_transaction_details, retry_transaction_tool]
+    params:
+      name: Reconciler_Agent
+      instruction: get_reconciler_prompt()
+      function: create_agent
+      instance: agent.create_agent
+      sub_agents: [escalator_agent]
+  escalator_agent:
+    type: instance
+    models: [gemini-2.5-flash]
+    tools: [fetch_transaction_for_report, save_generated_report]
+    params:
+      name: escalator_agent
+      description: AI-powered report generation system that creates comprehensive, insightful reports for all transaction
+        resolutions
+      instruction: get_escalator_prompt()
+
+models:
+  gemini-2.5-flash:
+    type: literal
+    agents: [agent.create_agent.0, escalator_agent, agent.create_agent.1]
+
+tools:
+  fetch_transaction_details:
+    type: function
+    agents: [agent.create_agent.1]
+    params:
+      description: |-
+        Fetch full details of a transaction from the database.
+        This tool has read-only access to the transactions table.
+
+        Args:
+            transaction_id: The transaction ID to fetch details for
+            user_id: Optional user ID for additional security filtering
+            tool_context: The tool context from ADK
+
+        Returns:
+            Dictionary containing transaction details or error information
+  fetch_transaction_for_report:
+    type: function
+    agents: [escalator_agent]
+    params:
+      description: |-
+        Fetch comprehensive transaction data to enable LLM-based report generation.
+
+        This tool retrieves all transaction details, retry attempts, and related data
+        so the LLM can generate a comprehensive, contextual report.
+
+        Args:
+            transaction_id: The transaction ID to fetch data for
+            tool_context: The tool context from ADK
+
+        Returns:
+            Dictionary containing all transaction data needed for report generation
+  get_transaction_status:
+    type: function
+    agents: [agent.create_agent.0]
+    params:
+      module: self.get_transaction_status
+      description: Get the current status of a transaction.
+  query_user_transactions:
+    type: function
+    agents: [agent.create_agent.0]
+    params:
+      description: |-
+        Query transactions for a specific user from the database.
+        CRITICALLY SANDBOXED: Can ONLY query transactions where user_id matches the provided user_id.
+
+        Args:
+            user_id: The user ID to query transactions for
+            limit: Optional limit on number of transactions to return
+            tool_context: The tool context from ADK
+
+        Returns:
+            List of transaction dictionaries
+  retry_transaction_tool:
+    type: function
+    agents: [agent.create_agent.1]
+    params:
+      description: |-
+        Retry a failed transaction by creating a new transaction record.
+        This tool enforces a retry limit of 2 attempts per original transaction.
+
+        Args:
+            transaction_id: The original transaction ID to retry
+            user_id: Optional user ID (will be fetched from transaction if not provided)
+            tool_context: The tool context from ADK
+
+        Returns:
+            Dictionary containing retry status and new transaction ID if successful
+  run_discrepancy_check:
+    type: function
+    agents: [agent.create_agent.0]
+    params:
+      description: |-
+        Run a discrepancy check on a specific transaction using the TRYBE ML model.
+
+        Args:
+            transaction_id: The transaction ID to check
+            tool_context: The tool context from ADK
+
+        Returns:
+            Dictionary with discrepancy detection results
+  save_generated_report:
+    type: function
+    agents: [escalator_agent]
+    params:
+      description: |-
+        Save an LLM-generated report to the messages table.
+
+        Args:
+            transaction_id: The transaction ID this report is for
+            report_content: The full markdown-formatted report content generated by the LLM
+            report_type: Type of report (SUCCESS, ESCALATION, RISK_ESCALATION)
+            priority: Priority level (LOW, MEDIUM, HIGH, CRITICAL)
+            tool_context: The tool context from ADK
+
+        Returns:
+            Dictionary containing save status and report metadata
+  send_message_to_remote_agent:
+    type: function
+    agents: [agent.create_agent.0]
+    params:
+      module: self.send_message_to_remote_agent
+      description: Send a task to a remote agent (Reconciler or Escalator).
+
+teams:
+  agent.create_agent.1:
+    type: hierarchy
+    agents: [agent.create_agent.1, escalator_agent]
+
+imports:
+  A2ACardResolver: a2a.client.A2ACardResolver
+  A2AClient: a2a.client.A2AClient
+  A2AStarletteApplication: a2a.server.apps.A2AStarletteApplication
+  accuracy_score: sklearn.metrics.accuracy_score
+  Agent: google.adk.agents.Agent
+  agent: agent
+  AgentCapabilities: a2a.types.AgentCapabilities
+  AgentCard: a2a.types.AgentCard
+  AgentSkill: a2a.types.AgentSkill
+  annotations: __future__.annotations
+  Any: typing.Any
+  app: api_server.app
+  AsyncGenerator: typing.AsyncGenerator
+  asyncio: asyncio
+  AsyncIterable: typing.AsyncIterable
+  asyncpg: asyncpg
+  BaseModel: pydantic.BaseModel
+  Callable: typing.Callable
+  classification_report: sklearn.metrics.classification_report
+  CORSMiddleware: fastapi.middleware.cors.CORSMiddleware
+  datetime: datetime.datetime
+  Decimal: decimal.Decimal
+  DefaultRequestHandler: a2a.server.request_handlers.DefaultRequestHandler
+  Dict: typing.Dict
+  DUMMY_USER_ID: tools.database_tools.DUMMY_USER_ID
+  escalator_agent: sub_agents.escalator_agent.agent.escalator_agent
+  EventQueue: a2a.server.events.event_queue.EventQueue
+  FastAPI: fastapi.FastAPI
+  fetch_transaction_details: tools.transaction_fetcher.fetch_transaction_details
+  fetch_transaction_for_report: tools.fetch_transaction_for_report.fetch_transaction_for_report
+  futures: concurrent.futures
+  get_escalator_prompt: prompt.get_escalator_prompt
+  get_reconciler_prompt: prompt.get_reconciler_prompt
+  get_spark_prompt: prompt.get_spark_prompt
+  HostAgent: host.agent.HostAgent
+  HTTPException: fastapi.HTTPException
+  httpx: httpx
+  InMemoryArtifactService: google.adk.artifacts.InMemoryArtifactService
+  InMemoryMemoryService: google.adk.memory.in_memory_memory_service.InMemoryMemoryService
+  InMemorySessionService: google.adk.sessions.InMemorySessionService
+  InMemoryTaskStore: a2a.server.tasks.InMemoryTaskStore
+  json: json
+  JSONResponse: fastapi.responses.JSONResponse
+  LabelEncoder: sklearn.preprocessing.LabelEncoder
+  List: typing.List
+  LlmAgent: google.adk.agents.LlmAgent
+  load_dotenv: dotenv.load_dotenv
+  logging: logging
+  LogisticRegression: sklearn.linear_model.LogisticRegression
+  MessageSendParams: a2a.types.MessageSendParams
+  nest_asyncio: nest_asyncio
+  np: numpy
+  Optional: typing.Optional
+  os: os
+  pd: pandas
+  query_user_transactions: tools.database_tools.query_user_transactions
+  random: random
+  RandomForestClassifier: sklearn.ensemble.RandomForestClassifier
+  re: re
+  ReadonlyContext: google.adk.agents.readonly_context.ReadonlyContext
+  RECONCILER_AGENT_URL: host.agent.RECONCILER_AGENT_URL
+  ReconcilerAgent: agent.ReconcilerAgent
+  ReconcilerAgentExecutor: agent_executor.ReconcilerAgentExecutor
+  RemoteAgentConnections: remote_agent_connection.RemoteAgentConnections
+  Request: fastapi.Request
+  RequestContext: a2a.server.agent_execution.context.RequestContext
+  retry_transaction_tool: tools.retry_transaction.retry_transaction_tool
+  roc_auc_score: sklearn.metrics.roc_auc_score
+  run_discrepancy_check: tools.database_tools.run_discrepancy_check
+  Runner: google.adk.runners.Runner
+  save_generated_report: tools.save_generated_report.save_generated_report
+  SendMessageRequest: a2a.types.SendMessageRequest
+  SendMessageResponse: a2a.types.SendMessageResponse
+  SendMessageSuccessResponse: a2a.types.SendMessageSuccessResponse
+  StandardScaler: sklearn.preprocessing.StandardScaler
+  StreamingResponse: fastapi.responses.StreamingResponse
+  sys: sys
+  Task: a2a.types.Task
+  TaskArtifactUpdateEvent: a2a.types.TaskArtifactUpdateEvent
+  TaskState: a2a.types.TaskState
+  TaskStatusUpdateEvent: a2a.types.TaskStatusUpdateEvent
+  time: time
+  timedelta: datetime.timedelta
+  ToolContext: google.adk.tools.tool_context.ToolContext
+  traceback: traceback
+  train_test_split: sklearn.model_selection.train_test_split
+  TRYBEDiscrepancyDetector: trybe_models.TRYBEDiscrepancyDetector
+  types: google.genai.types
+  Union: typing.Union
+  uuid: uuid
+  uvicorn: uvicorn
+
+functions:
+  __init__:
+    type: sync
+    module: agents.reconciler_agent.agent
+    args: [self]
+  _add_engineered_features:
+    type: sync
+    module: agents.host_agent_adk.host.tools.trybe_models
+    args: [self, df]
+    params:
+      returns: List[str]
+  _align:
+    type: sync
+    module: agents.host_agent_adk.host.tools.trybe_models
+    args: [self, df]
+    params:
+      returns: pd.DataFrame
+  _async_fetch:
+    type: async
+    module: agents.reconciler_agent.tools.transaction_fetcher
+  _async_fetch_data:
+    type: async
+    module: agents.reconciler_agent.sub_agents.escalator_agent.tools.fetch_transaction_for_report
+  _async_init_components:
+    type: async
+    module: agents.host_agent_adk.host.agent
+    args: [self, remote_agent_addresses]
+  _async_main:
+    type: async
+    module: agents.host_agent_adk.host.agent
+  _async_query:
+    type: async
+    module: agents.host_agent_adk.host.tools.database_tools
+  _async_retry:
+    type: async
+    module: agents.reconciler_agent.tools.retry_transaction
+  _async_save_report:
+    type: async
+    module: agents.reconciler_agent.sub_agents.escalator_agent.tools.save_generated_report
+  _async_update:
+    type: async
+    module: agents.host_agent_adk.host.tools.database_tools
+  _evaluate:
+    type: sync
+    module: agents.host_agent_adk.host.tools.trybe_models
+    args: [self, X_test, y_test]
+  _get_initialized_host_agent_sync:
+    type: sync
+    module: agents.host_agent_adk.host.agent
+  _init_model:
+    type: sync
+    module: agents.host_agent_adk.host.tools.trybe_models
+    args: [self]
+  _is_floating:
+    type: sync
+    module: agents.host_agent_adk.host.tools.trybe_models
+    args: [self, row]
+    params:
+      returns: bool
+  chat:
+    type: async
+    module: agents.host_agent_adk.api_server
+    args: [request]
+  chat_stream:
+    type: async
+    module: agents.host_agent_adk.api_server
+    args: [request]
+  clear_session:
+    type: async
+    module: agents.host_agent_adk.api_server
+    args: [session_id]
+  convert_to_json_serializable:
+    type: sync
+    module: agents.host_agent_adk.host.tools.database_tools
+    args: [value]
+    params:
+      returns: Any
+  convert_to_serializable:
+    type: sync
+    module: agents.reconciler_agent.sub_agents.escalator_agent.tools.fetch_transaction_for_report
+    args: [value]
+    params:
+      returns: Any
+  create:
+    type: async
+    module: agents.host_agent_adk.host.agent
+    args: [cls, remote_agent_addresses]
+  create_agent:
+    type: sync
+    module: agents.reconciler_agent.agent
+    args: [self]
+    params:
+      returns: LlmAgent
+  detect_discrepancies:
+    type: sync
+    module: agents.host_agent_adk.host.tools.trybe_models
+    args: [self, df]
+    params:
+      returns: pd.DataFrame
+  execute_agent_task:
+    type: async
+    module: agents.reconciler_agent.__main__
+  fetch_transaction_details:
+    type: sync
+    module: agents.reconciler_agent.tools.transaction_fetcher
+    args: [transaction_id, user_id, tool_context]
+    params:
+      returns: Dict
+  fetch_transaction_for_report:
+    type: sync
+    module: agents.reconciler_agent.sub_agents.escalator_agent.tools.fetch_transaction_for_report
+    args: [transaction_id, tool_context]
+    params:
+      returns: Dict
+  frame:
+    type: sync
+    module: agents.host_agent_adk.host.tools.trybe_models
+    args: [self]
+    params:
+      returns: pd.DataFrame
+  generate:
+    type: async
+    module: agents.host_agent_adk.api_server
+    params:
+      returns: AsyncGenerator
+  get_agent:
+    type: sync
+    module: agents.reconciler_agent.agent
+    args: [self]
+    params:
+      returns: LlmAgent
+  get_capabilities:
+    type: async
+    module: agents.host_agent_adk.api_server
+  get_escalator_prompt:
+    type: sync
+    module: agents.reconciler_agent.sub_agents.escalator_agent.prompt
+    params:
+      returns: str
+  get_feature_importance:
+    type: sync
+    module: agents.host_agent_adk.host.tools.trybe_models
+    args: [self]
+    params:
+      returns: Optional[pd.DataFrame]
+  get_flagged_transactions:
+    type: sync
+    module: agents.host_agent_adk.host.tools.trybe_models
+    args: [self, df]
+    params:
+      returns: pd.DataFrame
+  get_reconciler_prompt:
+    type: sync
+    module: agents.reconciler_agent.prompt
+    params:
+      returns: str
+  get_session:
+    type: async
+    module: agents.host_agent_adk.api_server
+    args: [session_id]
+  get_spark_prompt:
+    type: sync
+    module: agents.host_agent_adk.host.prompt
+    args: [user_id, available_agents, current_date]
+    params:
+      returns: str
+  get_transaction_status:
+    type: async
+    module: agents.host_agent_adk.host.agent
+    args: [self, transaction_id, tool_context]
+    params:
+      returns: Dict
+  health_check:
+    type: async
+    module: agents.host_agent_adk.api_server
+  load_data:
+    type: sync
+    module: agents.host_agent_adk.host.tools.trybe_models
+    args: [self, file_or_df]
+    params:
+      returns: pd.DataFrame
+  load_transaction_data:
+    type: sync
+    module: agents.host_agent_adk.host.tools.trybe_models
+    args: [self, src]
+    params:
+      returns: pd.DataFrame
+  main:
+    type: sync
+    module: agents.reconciler_agent.__main__
+  on_message_send:
+    type: async
+    module: agents.reconciler_agent.__main__
+    args: [self, params, context]
+  predict_risk:
+    type: sync
+    module: agents.host_agent_adk.host.tools.trybe_models
+    args: [self, transaction]
+    params:
+      returns: Union
+  preprocess:
+    type: sync
+    module: agents.host_agent_adk.host.tools.trybe_models
+    args: [self, df, is_training]
+    params:
+      returns: pd.DataFrame
+  query_user_transactions:
+    type: sync
+    module: agents.host_agent_adk.host.tools.database_tools
+    args: [user_id, limit, tool_context]
+    params:
+      returns: List[Dict]
+  retry_transaction_tool:
+    type: sync
+    module: agents.reconciler_agent.tools.retry_transaction
+    args: [transaction_id, user_id, tool_context]
+    params:
+      returns: Dict
+  root_instruction:
+    type: sync
+    module: agents.host_agent_adk.host.agent
+    args: [self, context]
+    params:
+      returns: str
+  run_discrepancy_check:
+    type: sync
+    module: agents.host_agent_adk.host.tools.database_tools
+    args: [transaction_id, tool_context]
+    params:
+      returns: Dict
+  save_generated_report:
+    type: sync
+    module: agents.reconciler_agent.sub_agents.escalator_agent.tools.save_generated_report
+    args: [transaction_id, report_content, report_type, priority, tool_context]
+    params:
+      returns: Dict
+  send_message:
+    type: async
+    module: agents.host_agent_adk.host.remote_agent_connection
+    args: [self, message_request]
+    params:
+      returns: SendMessageResponse
+  send_message_to_remote_agent:
+    type: async
+    module: agents.host_agent_adk.host.agent
+    args: [self, agent_name, task, tool_context]
+  startup_event:
+    type: async
+    module: agents.host_agent_adk.api_server
+  stream:
+    type: async
+    module: agents.host_agent_adk.host.agent
+    args: [self, query, session_id, metadata]
+    params:
+      returns: AsyncIterable[dict]
+  train_model:
+    type: sync
+    module: agents.host_agent_adk.host.tools.trybe_models
+    args: [self, df]
+  trigger_discrepancy:
+    type: async
+    module: agents.host_agent_adk.api_server
+    args: [transaction_id]
+  trigger_discrepancy_alert:
+    type: async
+    module: agents.host_agent_adk.host.agent
+    args: [self, transaction_id, session_id]
+    params:
+      returns: str
+
+variables:
+  DB_HOST:
+    type: env
+    params:
+      caller: [os.getenv]
+      path: [agents.reconciler_agent.sub_agents.escalator_agent.tools.fetch_transaction_for_report, agents.reconciler_agent.sub_agents.escalator_agent.tools.save_generated_report,
+        agents.reconciler_agent.tools.transaction_fetcher, agents.reconciler_agent.tools.retry_transaction, agents.host_agent_adk.host.tools.database_tools]
+  DB_NAME:
+    type: env
+    params:
+      caller: [os.getenv]
+      path: [agents.reconciler_agent.sub_agents.escalator_agent.tools.fetch_transaction_for_report, agents.reconciler_agent.sub_agents.escalator_agent.tools.save_generated_report,
+        agents.reconciler_agent.tools.transaction_fetcher, agents.reconciler_agent.tools.retry_transaction, agents.host_agent_adk.host.tools.database_tools]
+  DB_PASSWORD:
+    type: env
+    params:
+      caller: [os.getenv]
+      path: [agents.reconciler_agent.sub_agents.escalator_agent.tools.fetch_transaction_for_report, agents.reconciler_agent.sub_agents.escalator_agent.tools.save_generated_report,
+        agents.reconciler_agent.tools.transaction_fetcher, agents.reconciler_agent.tools.retry_transaction, agents.host_agent_adk.host.tools.database_tools]
+  DB_PORT:
+    type: env
+    params:
+      caller: [os.getenv]
+      path: [agents.reconciler_agent.sub_agents.escalator_agent.tools.fetch_transaction_for_report, agents.reconciler_agent.sub_agents.escalator_agent.tools.save_generated_report,
+        agents.reconciler_agent.tools.transaction_fetcher, agents.reconciler_agent.tools.retry_transaction, agents.host_agent_adk.host.tools.database_tools]
+  DB_USER:
+    type: env
+    params:
+      caller: [os.getenv]
+      path: [agents.reconciler_agent.sub_agents.escalator_agent.tools.fetch_transaction_for_report, agents.reconciler_agent.sub_agents.escalator_agent.tools.save_generated_report,
+        agents.reconciler_agent.tools.transaction_fetcher, agents.reconciler_agent.tools.retry_transaction, agents.host_agent_adk.host.tools.database_tools]
+  GOOGLE_API_KEY:
+    type: env
+    params:
+      caller: [os.getenv]
+      path: [agents.reconciler_agent.__main__]
+  GOOGLE_GENAI_USE_VERTEXAI:
+    type: env
+    params:
+      caller: [os.getenv]
+      path: [agents.reconciler_agent.__main__]
+
+networks:
+  agent_card:
+    type: api
+    actions: [GET]
+    protocols: [http]
+    ports: ["80"]
+    params:
+      caller: [main]
+      pattern: http://{host}:{port}/
